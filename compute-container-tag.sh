@@ -167,7 +167,7 @@ if [[ "$BASE_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
   # master-Version übernimmt und damit dieser Tag nie hochgezählt wird.
   MAJOR="${BASH_REMATCH[1]}"
   MINOR="${BASH_REMATCH[2]}"
-  TAG="${MAJOR}.${MINOR}.0+${GITHUB_RUN_ID}"
+  TAG="${MAJOR}.${MINOR}.0-${GITHUB_RUN_ID}"
   echo "Tag für release-Branch '${BASE_REF}': ${TAG}" >&2
   write_result "$TAG" "false" "Ziel-Branch ist ein release-Branch - Version kommt fest aus dem Branch-Namen (\`${MAJOR}.${MINOR}.0\`), unabhängig von der Tag-Historie; wird nie hochgezählt."
 fi
@@ -188,7 +188,7 @@ if [ "${PR_ACTION}" != "closed" ]; then
   if [ -n "${HEAD_REF:-}" ] && [[ "$HEAD_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
     MAJOR="${BASH_REMATCH[1]}"
     MINOR="${BASH_REMATCH[2]}"
-    TAG="${MAJOR}.${MINOR}.0+${GITHUB_RUN_ID}"
+    TAG="${MAJOR}.${MINOR}.0-${GITHUB_RUN_ID}"
     echo "PR von release-Branch '${HEAD_REF}' gegen '${BASE_REF}' -> Preview: ${TAG}" >&2
     write_result "$TAG" "false" "Source-Branch ist ein release-Branch - Preview zeigt schon dessen Version (\`${MAJOR}.${MINOR}.0\`) statt des alten master-Tags."
   else
@@ -197,7 +197,7 @@ if [ "${PR_ACTION}" != "closed" ]; then
       echo "::error::Kein Semver-Tag (X.Y.Z) auf '${BASE_REF}' gefunden. Initialen Tag setzen, z.B. 0.1.0." >&2
       exit 1
     fi
-    TAG="${BASE_TAG}+${GITHUB_RUN_ID}"
+    TAG="${BASE_TAG}-${GITHUB_RUN_ID}"
     echo "Preview-Tag: ${TAG}" >&2
     write_result "$TAG" "false" "Preview-Tag: letzter Tag auf \`${BASE_REF}\` (\`${BASE_TAG}\`) + Run-ID."
   fi
