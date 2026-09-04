@@ -1,0 +1,44 @@
+name: "Compute container tag"
+description: "Berechnet den Container-Image-Tag je nach PR-Event, Ziel- und Source-Branch."
+
+inputs:
+  event-name:
+    description: "pull_request oder workflow_dispatch"
+    required: true
+  base-ref:
+    description: "Ziel-Branch des PRs bzw. der manuell gewählte Branch"
+    required: true
+  head-ref:
+    description: "Source-Branch des PRs (nur bei pull_request relevant)"
+    required: false
+    default: ""
+  pr-action:
+    description: "github.event.action (opened|synchronize|reopened|edited|closed); bei workflow_dispatch leer lassen"
+    required: false
+    default: ""
+  pr-merged:
+    description: "github.event.pull_request.merged als String 'true'/'false' (nur bei closed relevant)"
+    required: false
+    default: "false"
+
+outputs:
+  tag:
+    description: "Der berechnete Tag (leer, wenn skip=true)"
+    value: ${{ steps.compute.outputs.tag }}
+  skip:
+    description: "'true', wenn kein Tag erzeugt werden soll"
+    value: ${{ steps.compute.outputs.skip }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        GITHUB_EVENT_NAME: ${{ inputs.event-name }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        PR_ACTION: ${{ inputs.pr-action }}
+        PR_MERGED: ${{ inputs.pr-merged }}
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: bash "${{ github.action_path }}/compute-container-tag.sh"
