@@ -104,6 +104,8 @@ bump_patch() {
   echo "${major}.${minor}.$((patch + 1))"
 }
 
+SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+
 write_output() {
   local tag="$1"
   local skip="$2"
@@ -115,13 +117,43 @@ write_output() {
   fi
 }
 
+# Schreibt Tag, Ziel-/Source-Branch und Begründung in den Step Summary
+# und in $GITHUB_OUTPUT, und beendet das Skript.
+write_result() {
+  local tag="$1"
+  local skip="$2"
+  local reason="$3"
+
+  write_output "$tag" "$skip"
+
+  {
+    echo "## Container-Tag"
+    echo ""
+    echo "| Feld | Wert |"
+    echo "|---|---|"
+    if [ "$skip" = "true" ]; then
+      echo "| Tag | _kein Tag erzeugt_ |"
+    else
+      echo "| Tag | \`${tag}\` |"
+    fi
+    echo "| Ziel-Branch | \`${BASE_REF}\` |"
+    echo "| Source-Branch | $( [ -n "${HEAD_REF:-}" ] && echo "\`${HEAD_REF}\`" || echo "—" ) |"
+    echo "| Event | \`${GITHUB_EVENT_NAME}\` / \`${PR_ACTION}\` |"
+    echo "| Begründung | ${reason} |"
+  } >> "$SUMMARY"
+
+  if [ "$skip" != "true" ]; then
+    echo "$tag"
+  fi
+  exit 0
+}
+
 # --- Fall: PR geschlossen ohne Merge -> nie ein Tag, egal welches Ziel ---
 if [ "${PR_ACTION}" = "closed" ]; then
   : "${PR_MERGED:?Bei PR_ACTION=closed muss PR_MERGED gesetzt sein}"
   if [ "${PR_MERGED}" != "true" ]; then
     echo "PR wurde geschlossen, aber nicht gemerged - kein Tag." >&2
-    write_output "" "true"
-    exit 0
+    write_result "" "true" "PR wurde geschlossen, aber nicht gemerged."
   fi
 fi
 
@@ -137,9 +169,7 @@ if [[ "$BASE_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
   MINOR="${BASH_REMATCH[2]}"
   TAG="${MAJOR}.${MINOR}.0+${GITHUB_RUN_ID}"
   echo "Tag für release-Branch '${BASE_REF}': ${TAG}" >&2
-  write_output "$TAG" "false"
-  echo "$TAG"
-  exit 0
+  write_result "$TAG" "false" "Ziel-Branch ist ein release-Branch - Version kommt fest aus dem Branch-Namen (\`${MAJOR}.${MINOR}.0\`), unabhängig von der Tag-Historie; wird nie hochgezählt."
 fi
 
 if [[ ! "$BASE_REF" =~ $MAIN_BRANCH_REGEX ]]; then
@@ -160,6 +190,7 @@ if [ "${PR_ACTION}" != "closed" ]; then
     MINOR="${BASH_REMATCH[2]}"
     TAG="${MAJOR}.${MINOR}.0+${GITHUB_RUN_ID}"
     echo "PR von release-Branch '${HEAD_REF}' gegen '${BASE_REF}' -> Preview: ${TAG}" >&2
+    write_result "$TAG" "false" "Source-Branch ist ein release-Branch - Preview zeigt schon dessen Version (\`${MAJOR}.${MINOR}.0\`) statt des alten master-Tags."
   else
     BASE_TAG="$(latest_semver_tag_on "$BASE_REF")"
     if [ -z "$BASE_TAG" ]; then
@@ -168,10 +199,8 @@ if [ "${PR_ACTION}" != "closed" ]; then
     fi
     TAG="${BASE_TAG}+${GITHUB_RUN_ID}"
     echo "Preview-Tag: ${TAG}" >&2
+    write_result "$TAG" "false" "Preview-Tag: letzter Tag auf \`${BASE_REF}\` (\`${BASE_TAG}\`) + Run-ID."
   fi
-  write_output "$TAG" "false"
-  echo "$TAG"
-  exit 0
 fi
 
 # Fall 3: Merge nach master/main.
@@ -183,6 +212,7 @@ if [[ "$HEAD_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
   MINOR="${BASH_REMATCH[2]}"
   TAG="${MAJOR}.${MINOR}.0"
   echo "Release-Branch '${HEAD_REF}' wurde nach '${BASE_REF}' gemerged -> finaler Tag ${TAG}" >&2
+  write_result "$TAG" "false" "Release-Branch \`${HEAD_REF}\` wurde final nach \`${BASE_REF}\` gemerged - finaler Tag ohne Suffix. \`${BASE_REF}\` zählt ab jetzt von \`${MAJOR}.${MINOR}.x\` weiter."
 else
   # Fall 3b: hotfix/bugfix/... direkt in master gemerged.
   BASE_TAG="$(latest_semver_tag_on "$BASE_REF")"
@@ -192,7 +222,5 @@ else
   fi
   TAG="$(bump_patch "$BASE_TAG")"
   echo "'${HEAD_REF}' wurde nach '${BASE_REF}' gemerged -> Patch-Bump auf ${TAG}" >&2
+  write_result "$TAG" "false" "\`${HEAD_REF}\` wurde nach \`${BASE_REF}\` gemerged - Patch-Bump von \`${BASE_TAG}\` auf \`${TAG}\`."
 fi
-
-write_output "$TAG" "false"
-echo "$TAG"
