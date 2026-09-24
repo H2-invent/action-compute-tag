@@ -22,7 +22,7 @@ inputs:
     default: "false"
 
 outputs:
-  tag:
+  version:
     description: "Der berechnete Tag (leer, wenn skip=true)"
     value: ${{ steps.compute.outputs.tag }}
   skip:
