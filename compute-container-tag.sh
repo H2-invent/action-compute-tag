@@ -3,6 +3,9 @@
 # compute-container-tag.sh
 #
 # Regeln:
+#   0) PR mit upmerge/** als Base- ODER Head-Branch:
+#        -> KEIN Tag (skip=true), egal welche PR-Aktion.
+#
 #   1) PR gegen master/main (z.B. von hotfix/*):
 #        Preview-Tag = <letzter_tag_auf_master>+<run_id>
 #
@@ -43,20 +46,22 @@
 #                        bei workflow_dispatch: der manuell gewählte
 #                        Branch (z.B. github.event.inputs.branch oder
 #                        github.ref_name)
-#   HEAD_REF            nur bei pull_request+closed(merged) relevant:
-#                        github.event.pull_request.head.ref
+#   HEAD_REF            bei pull_request: github.event.pull_request.head.ref
+#                        (bei ALLEN PR-Aktionen übergeben, sonst wird ein
+#                        PR von upmerge/** nicht erkannt)
 #
 # Voraussetzung im Workflow: actions/checkout mit fetch-depth: 0 UND
 # fetch-tags: true, sonst sind Tags lokal nicht sichtbar.
 #
 # Ausgabe (nach $GITHUB_OUTPUT):
 #   tag=<TAG>     nur gesetzt, wenn ein Tag berechnet wurde
-#   skip=true|false   "true" wenn kein Tag erzeugt werden soll (Fall 4/5)
+#   skip=true|false   "true" wenn kein Tag erzeugt werden soll (Fall 0/4)
 
 set -euo pipefail
 
 MAIN_BRANCH_REGEX='^(main|master)$'
 RELEASE_BRANCH_REGEX='^release/([0-9]+)\.([0-9]+)$'
+UPMERGE_BRANCH_REGEX='^upmerge/'
 SEMVER_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 : "${GITHUB_EVENT_NAME:?GITHUB_EVENT_NAME muss gesetzt sein}"
@@ -78,31 +83,6 @@ case "${GITHUB_EVENT_NAME}" in
     exit 1
     ;;
 esac
-
-git fetch --tags --force --quiet || true
-
-# Liefert den höchsten reinen Semver-Tag (X.Y.Z, kein "+..."), der auf
-# $1 (Branch/Ref) erreichbar ist.
-latest_semver_tag_on() {
-  local ref="$1"
-  local resolved_ref="$ref"
-
-  if ! git rev-parse --verify --quiet "$ref" >/dev/null; then
-    resolved_ref="origin/${ref}"
-  fi
-
-  git tag --merged "$resolved_ref" 2>/dev/null \
-    | grep -E "$SEMVER_TAG_REGEX" \
-    | sort -t. -k1,1n -k2,2n -k3,3n \
-    | tail -n1 || true
-}
-
-bump_patch() {
-  local v="$1"
-  local major minor patch
-  IFS='.' read -r major minor patch <<< "$v"
-  echo "${major}.${minor}.$((patch + 1))"
-}
 
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 
@@ -148,7 +128,38 @@ write_result() {
   exit 0
 }
 
-# --- Fall: PR geschlossen ohne Merge -> nie ein Tag, egal welches Ziel ---
+# --- Fall 0: upmerge/** als Base oder Head -> nie ein Tag ---
+if [[ "${BASE_REF}" =~ $UPMERGE_BRANCH_REGEX ]] || [[ "${HEAD_REF:-}" =~ $UPMERGE_BRANCH_REGEX ]]; then
+  echo "upmerge-Branch beteiligt - kein Tag." >&2
+  write_result "" "true" "upmerge-Branch beteiligt (Base: \`${BASE_REF}\`, Head: \`${HEAD_REF:-—}\`)."
+fi
+
+git fetch --tags --force --quiet || true
+
+# Liefert den höchsten reinen Semver-Tag (X.Y.Z, kein "+..."), der auf
+# $1 (Branch/Ref) erreichbar ist.
+latest_semver_tag_on() {
+  local ref="$1"
+  local resolved_ref="$ref"
+
+  if ! git rev-parse --verify --quiet "$ref" >/dev/null; then
+    resolved_ref="origin/${ref}"
+  fi
+
+  git tag --merged "$resolved_ref" 2>/dev/null \
+    | grep -E "$SEMVER_TAG_REGEX" \
+    | sort -t. -k1,1n -k2,2n -k3,3n \
+    | tail -n1 || true
+}
+
+bump_patch() {
+  local v="$1"
+  local major minor patch
+  IFS='.' read -r major minor patch <<< "$v"
+  echo "${major}.${minor}.$((patch + 1))"
+}
+
+# --- Fall 4: PR geschlossen ohne Merge -> nie ein Tag, egal welches Ziel ---
 if [ "${PR_ACTION}" = "closed" ]; then
   : "${PR_MERGED:?Bei PR_ACTION=closed muss PR_MERGED gesetzt sein}"
   if [ "${PR_MERGED}" != "true" ]; then
