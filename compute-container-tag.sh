@@ -3,15 +3,18 @@
 # compute-container-tag.sh
 #
 # Regeln:
+#   S) Event steht in SKIP_EVENTS (Default: "push"):
+#        -> KEIN Tag (skip=true).
+#
 #   0) PR mit upmerge/** als Base- ODER Head-Branch:
 #        -> KEIN Tag (skip=true), egal welche PR-Aktion.
 #
 #   1) PR gegen master/main (z.B. von hotfix/*):
-#        Preview-Tag = <letzter_tag_auf_master>+<run_id>
+#        Preview-Tag = <letzter_tag_auf_master>-<run_id>
 #
 #   2) PR gegen release/X.Y offen/aktualisiert ODER dorthin gemerged
 #      (egal woher, auch von master abgezweigt):
-#        Tag = X.Y.0+<run_id>
+#        Tag = X.Y.0-<run_id>
 #        IMMER X.Y.0 - wird NIE hochgezählt, egal wie oft in den
 #        Release-Branch gemerged wird. Merge und Preview sehen für
 #        Release-Branches identisch aus, nur die run_id unterscheidet
@@ -34,7 +37,11 @@
 #        dabei der manuell gewählte Branch (z.B. per Workflow-Input).
 #
 # Erwartete Umgebungsvariablen:
-#   GITHUB_EVENT_NAME   "pull_request" oder "workflow_dispatch"
+#   GITHUB_EVENT_NAME   "pull_request", "workflow_dispatch" oder "push"
+#   SKIP_EVENTS         kommagetrennte Liste von Events, bei denen immer
+#                        skip=true ausgegeben wird. Default: "push".
+#                        Explizit leer ("") = kein Event wird übersprungen;
+#                        push wird dann wie workflow_dispatch behandelt.
 #   GITHUB_RUN_ID       Actions Run-ID (für den Preview-Suffix)
 #   PR_ACTION           bei pull_request: github.event.action
 #                        (opened|synchronize|reopened|edited|closed|...)
@@ -46,6 +53,7 @@
 #                        bei workflow_dispatch: der manuell gewählte
 #                        Branch (z.B. github.event.inputs.branch oder
 #                        github.ref_name)
+#                        bei push: optional, Fallback ist GITHUB_REF_NAME
 #   HEAD_REF            bei pull_request: github.event.pull_request.head.ref
 #                        (bei ALLEN PR-Aktionen übergeben, sonst wird ein
 #                        PR von upmerge/** nicht erkannt)
@@ -55,7 +63,7 @@
 #
 # Ausgabe (nach $GITHUB_OUTPUT):
 #   tag=<TAG>     nur gesetzt, wenn ein Tag berechnet wurde
-#   skip=true|false   "true" wenn kein Tag erzeugt werden soll (Fall 0/4)
+#   skip=true|false   "true" wenn kein Tag erzeugt werden soll (Fall S/0/4)
 
 set -euo pipefail
 
@@ -66,6 +74,11 @@ SEMVER_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 : "${GITHUB_EVENT_NAME:?GITHUB_EVENT_NAME muss gesetzt sein}"
 : "${GITHUB_RUN_ID:?GITHUB_RUN_ID muss gesetzt sein}"
+# "-" statt ":-": explizit leer gesetzt bleibt leer (= nichts überspringen)
+SKIP_EVENTS="${SKIP_EVENTS-push}"
+
+# Bei push gibt es keinen PR-Base-Branch -> Fallback auf den gepushten Branch
+BASE_REF="${BASE_REF:-${GITHUB_REF_NAME:-}}"
 : "${BASE_REF:?BASE_REF muss gesetzt sein}"
 
 case "${GITHUB_EVENT_NAME}" in
@@ -78,8 +91,13 @@ case "${GITHUB_EVENT_NAME}" in
     # damit die weiter unten stehende "PR_ACTION != closed"-Weiche greift.
     PR_ACTION="manual"
     ;;
+  push)
+    # Standardmäßig über SKIP_EVENTS übersprungen. Ist push nicht in
+    # SKIP_EVENTS, wird es wie workflow_dispatch als Preview behandelt.
+    PR_ACTION="push"
+    ;;
   *)
-    echo "::error::Nur GITHUB_EVENT_NAME=pull_request oder workflow_dispatch wird unterstützt." >&2
+    echo "::error::Nur GITHUB_EVENT_NAME=pull_request, workflow_dispatch oder push wird unterstützt." >&2
     exit 1
     ;;
 esac
@@ -128,6 +146,12 @@ write_result() {
   exit 0
 }
 
+# --- Fall S: Event steht in SKIP_EVENTS -> nie ein Tag ---
+if [[ ",${SKIP_EVENTS// /}," == *",${GITHUB_EVENT_NAME},"* ]]; then
+  echo "Event '${GITHUB_EVENT_NAME}' steht in SKIP_EVENTS - kein Tag." >&2
+  write_result "" "true" "Event \`${GITHUB_EVENT_NAME}\` steht in SKIP_EVENTS (\`${SKIP_EVENTS}\`)."
+fi
+
 # --- Fall 0: upmerge/** als Base oder Head -> nie ein Tag ---
 if [[ "${BASE_REF}" =~ $UPMERGE_BRANCH_REGEX ]] || [[ "${HEAD_REF:-}" =~ $UPMERGE_BRANCH_REGEX ]]; then
   echo "upmerge-Branch beteiligt - kein Tag." >&2
@@ -172,7 +196,7 @@ fi
 
 if [[ "$BASE_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
   # Fall 2: sowohl Preview (offen/aktualisiert) als auch Merge in
-  # release/X.Y erzeugen denselben Tag X.Y.0+<run_id>. Bewusst
+  # release/X.Y erzeugen denselben Tag X.Y.0-<run_id>. Bewusst
   # unabhängig von jeglicher Tag-Historie, damit ein von master
   # abgezweigter Branch (z.B. mit Tag 1.5.6) nicht fälschlich die
   # master-Version übernimmt und damit dieser Tag nie hochgezählt wird.
@@ -194,7 +218,7 @@ if [ "${PR_ACTION}" != "closed" ]; then
   #
   # Sonderfall: kommt der PR von einem release/X.Y Branch (z.B. wird
   # release/1.5 gegen master geöffnet), soll die Preview schon die
-  # neue Version zeigen (1.5.0+<run_id>) statt des alten master-Tags
+  # neue Version zeigen (1.5.0-<run_id>) statt des alten master-Tags
   # - schließlich wird daraus beim Merge ohnehin 1.5.0.
   if [ -n "${HEAD_REF:-}" ] && [[ "$HEAD_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
     MAJOR="${BASH_REMATCH[1]}"

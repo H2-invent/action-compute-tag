@@ -20,6 +20,10 @@ inputs:
     description: "github.event.pull_request.merged als String 'true'/'false' (nur bei closed relevant)"
     required: false
     default: "false"
+  skip-events:
+    description: "Kommagetrennte Events, bei denen immer skip=true ausgegeben wird"
+    required: false
+    default: "push"
 
 outputs:
   version:
@@ -41,4 +45,5 @@ runs:
         PR_MERGED: ${{ inputs.pr-merged }}
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_REF: ${{ inputs.head-ref }}
+        SKIP_EVENTS: ${{ inputs.skip-events }}
       run: bash "${{ github.action_path }}/compute-container-tag.sh"
