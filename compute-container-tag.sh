@@ -4,66 +4,75 @@
 #
 # Regeln:
 #   S) Event steht in SKIP_EVENTS (Default: "push"):
-#        -> KEIN Tag (skip=true).
+#      -> KEIN Tag (skip=true).
 #
 #   0) PR mit upmerge/** als Base- ODER Head-Branch:
-#        -> KEIN Tag (skip=true), egal welche PR-Aktion.
+#      -> KEIN Tag (skip=true), egal welche PR-Aktion.
+#
+#   D) PR ist als Draft markiert (PR_DRAFT=true):
+#      -> KEIN Tag (skip=true). Sobald der PR auf "Ready for review"
+#         gestellt wird (Event-Typ ready_for_review), greifen wieder
+#         die normalen Regeln (Preview, Fall 1/2).
 #
 #   1) PR gegen master/main (z.B. von hotfix/*):
-#        Preview-Tag = <letzter_tag_auf_master>-<run_id>
+#      Preview-Tag = <letzter_tag_auf_master>-<run_id>
 #
 #   2) PR gegen release/X.Y offen/aktualisiert ODER dorthin gemerged
 #      (egal woher, auch von master abgezweigt):
-#        Tag = X.Y.0-<run_id>
-#        IMMER X.Y.0 - wird NIE hochgezählt, egal wie oft in den
-#        Release-Branch gemerged wird. Merge und Preview sehen für
-#        Release-Branches identisch aus, nur die run_id unterscheidet
-#        sich je Lauf.
+#      Tag = X.Y.0-<run_id>
+#      IMMER X.Y.0 - wird NIE hochgezählt, egal wie oft in den
+#      Release-Branch gemerged wird. Merge und Preview sehen für
+#      Release-Branches identisch aus, nur die run_id unterscheidet
+#      sich je Lauf.
 #
 #   3) PR nach master gemerged (merged=true, base=master):
-#        a) Source-Branch ist release/X.Y
-#             -> finaler Tag = X.Y.0 (ohne Suffix) - das ist der
-#                "offizielle" Release. Ab jetzt zählt master von hier
-#                weiter (nächster Hotfix wird X.Y.1 usw.)
-#        b) Source-Branch ist alles andere (hotfix/bugfix/...)
-#             -> finaler Tag = bump_patch(letzter_tag_auf_master)
+#      a) Source-Branch ist release/X.Y
+#         -> finaler Tag = X.Y.0 (ohne Suffix) - das ist der
+#            "offizielle" Release. Ab jetzt zählt master von hier
+#            weiter (nächster Hotfix wird X.Y.1 usw.)
+#      b) Source-Branch ist alles andere (hotfix/bugfix/...)
+#         -> finaler Tag = bump_patch(letzter_tag_auf_master)
 #
 #   4) PR geschlossen ohne Merge (egal welches Ziel):
-#        -> KEIN Tag.
+#      -> KEIN Tag.
 #
 #   5) Manueller Trigger (workflow_dispatch):
-#        Wird IMMER wie Fall 1/2 (Preview) behandelt, nie final -
-#        unabhängig davon, welcher Branch gewählt wurde. BASE_REF ist
-#        dabei der manuell gewählte Branch (z.B. per Workflow-Input).
+#      Wird IMMER wie Fall 1/2 (Preview) behandelt, nie final -
+#      unabhängig davon, welcher Branch gewählt wurde. BASE_REF ist
+#      dabei der manuell gewählte Branch (z.B. per Workflow-Input).
 #
 # Erwartete Umgebungsvariablen:
-#   GITHUB_EVENT_NAME   "pull_request", "workflow_dispatch" oder "push"
-#   SKIP_EVENTS         kommagetrennte Liste von Events, bei denen immer
-#                        skip=true ausgegeben wird. Default: "push".
-#                        Explizit leer ("") = kein Event wird übersprungen;
-#                        push wird dann wie workflow_dispatch behandelt.
-#   GITHUB_RUN_ID       Actions Run-ID (für den Preview-Suffix)
-#   PR_ACTION           bei pull_request: github.event.action
-#                        (opened|synchronize|reopened|edited|closed|...)
-#                        bei workflow_dispatch: wird ignoriert/nicht
-#                        benötigt, intern immer als Preview behandelt.
-#   PR_MERGED           nur bei pull_request+closed relevant:
-#                        github.event.pull_request.merged ("true"/"false")
-#   BASE_REF            bei pull_request: github.event.pull_request.base.ref
-#                        bei workflow_dispatch: der manuell gewählte
-#                        Branch (z.B. github.event.inputs.branch oder
-#                        github.ref_name)
-#                        bei push: optional, Fallback ist GITHUB_REF_NAME
-#   HEAD_REF            bei pull_request: github.event.pull_request.head.ref
-#                        (bei ALLEN PR-Aktionen übergeben, sonst wird ein
-#                        PR von upmerge/** nicht erkannt)
+#   GITHUB_EVENT_NAME  "pull_request", "workflow_dispatch" oder "push"
+#   SKIP_EVENTS        kommagetrennte Liste von Events, bei denen immer
+#                      skip=true ausgegeben wird. Default: "push".
+#                      Explizit leer ("") = kein Event wird übersprungen;
+#                      push wird dann wie workflow_dispatch behandelt.
+#   GITHUB_RUN_ID      Actions Run-ID (für den Preview-Suffix)
+#   PR_ACTION          bei pull_request: github.event.action
+#                      (opened|synchronize|reopened|edited|closed|
+#                       ready_for_review|...)
+#                      bei workflow_dispatch: wird ignoriert/nicht
+#                      benötigt, intern immer als Preview behandelt.
+#   PR_MERGED          nur bei pull_request+closed relevant:
+#                      github.event.pull_request.merged ("true"/"false")
+#   PR_DRAFT           bei pull_request: github.event.pull_request.draft
+#                      ("true"/"false"). Optional, Default "false".
+#                      Bei anderen Events ignoriert.
+#   BASE_REF           bei pull_request: github.event.pull_request.base.ref
+#                      bei workflow_dispatch: der manuell gewählte
+#                      Branch (z.B. github.event.inputs.branch oder
+#                      github.ref_name)
+#                      bei push: optional, Fallback ist GITHUB_REF_NAME
+#   HEAD_REF           bei pull_request: github.event.pull_request.head.ref
+#                      (bei ALLEN PR-Aktionen übergeben, sonst wird ein
+#                       PR von upmerge/** nicht erkannt)
 #
 # Voraussetzung im Workflow: actions/checkout mit fetch-depth: 0 UND
 # fetch-tags: true, sonst sind Tags lokal nicht sichtbar.
 #
 # Ausgabe (nach $GITHUB_OUTPUT):
-#   tag=<TAG>     nur gesetzt, wenn ein Tag berechnet wurde
-#   skip=true|false   "true" wenn kein Tag erzeugt werden soll (Fall S/0/4)
+#   tag=<TAG>          nur gesetzt, wenn ein Tag berechnet wurde
+#   skip=true|false    "true" wenn kein Tag erzeugt werden soll (Fall S/0/D/4)
 
 set -euo pipefail
 
@@ -74,8 +83,12 @@ SEMVER_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 : "${GITHUB_EVENT_NAME:?GITHUB_EVENT_NAME muss gesetzt sein}"
 : "${GITHUB_RUN_ID:?GITHUB_RUN_ID muss gesetzt sein}"
+
 # "-" statt ":-": explizit leer gesetzt bleibt leer (= nichts überspringen)
 SKIP_EVENTS="${SKIP_EVENTS-push}"
+
+# Optional: fehlt die Variable (ältere Workflows), gilt der PR als kein Draft
+PR_DRAFT="${PR_DRAFT:-false}"
 
 # Bei push gibt es keinen PR-Base-Branch -> Fallback auf den gepushten Branch
 BASE_REF="${BASE_REF:-${GITHUB_REF_NAME:-}}"
@@ -158,6 +171,12 @@ if [[ "${BASE_REF}" =~ $UPMERGE_BRANCH_REGEX ]] || [[ "${HEAD_REF:-}" =~ $UPMERG
   write_result "" "true" "upmerge-Branch beteiligt (Base: \`${BASE_REF}\`, Head: \`${HEAD_REF:-—}\`)."
 fi
 
+# --- Fall D: Draft-PR -> nie ein Tag ---
+if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${PR_DRAFT}" = "true" ]; then
+  echo "PR ist als Draft markiert - kein Tag." >&2
+  write_result "" "true" "PR ist als Draft markiert. Build startet nach \"Ready for review\"."
+fi
+
 git fetch --tags --force --quiet || true
 
 # Liefert den höchsten reinen Semver-Tag (X.Y.Z, kein "+..."), der auf
@@ -165,11 +184,9 @@ git fetch --tags --force --quiet || true
 latest_semver_tag_on() {
   local ref="$1"
   local resolved_ref="$ref"
-
   if ! git rev-parse --verify --quiet "$ref" >/dev/null; then
     resolved_ref="origin/${ref}"
   fi
-
   git tag --merged "$resolved_ref" 2>/dev/null \
     | grep -E "$SEMVER_TAG_REGEX" \
     | sort -t. -k1,1n -k2,2n -k3,3n \
