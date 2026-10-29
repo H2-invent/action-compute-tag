@@ -13,13 +13,17 @@ inputs:
     required: false
     default: ""
   pr-action:
-    description: "github.event.action (opened|synchronize|reopened|edited|closed); bei workflow_dispatch leer lassen"
+    description: "github.event.action (opened|synchronize|reopened|edited|closed|ready_for_review); bei workflow_dispatch leer lassen"
     required: false
     default: ""
   pr-merged:
     description: "github.event.pull_request.merged als String 'true'/'false' (nur bei closed relevant)"
     required: false
     default: "false"
+  pr-draft:
+    description: "Optionaler Override für den Draft-Status ('true'/'false'). Leer = automatisch aus github.event.pull_request.draft"
+    required: false
+    default: ""
   skip-events:
     description: "Kommagetrennte Events, bei denen immer skip=true ausgegeben wird"
     required: false
@@ -43,6 +47,7 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         PR_ACTION: ${{ inputs.pr-action }}
         PR_MERGED: ${{ inputs.pr-merged }}
+        PR_DRAFT: ${{ inputs.pr-draft || github.event.pull_request.draft || 'false' }}
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_REF: ${{ inputs.head-ref }}
         SKIP_EVENTS: ${{ inputs.skip-events }}
