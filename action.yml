@@ -28,6 +28,18 @@ inputs:
     description: "Kommagetrennte Events, bei denen immer skip=true ausgegeben wird"
     required: false
     default: "push"
+  main-branches:
+    description: "Kommagetrennte Namen der Hauptbranches. Leer = 'main,master'"
+    required: false
+    default: "main,master"
+  release-prefix:
+    description: "Präfix der Release-Branches vor X.Y. Leer = 'release/'"
+    required: false
+    default: "release/"
+  lts-prefix:
+    description: "Präfix der Wartungsbranches vor X.Y. Leer = 'lts/'"
+    required: false
+    default: "lts/"
 
 outputs:
   version:
@@ -51,4 +63,7 @@ runs:
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_REF: ${{ inputs.head-ref }}
         SKIP_EVENTS: ${{ inputs.skip-events }}
+        MAIN_BRANCHES: ${{ inputs.main-branches }}
+        RELEASE_PREFIX: ${{ inputs.release-prefix }}
+        LTS_PREFIX: ${{ inputs.lts-prefix }}
       run: bash "${{ github.action_path }}/compute-container-tag.sh"
