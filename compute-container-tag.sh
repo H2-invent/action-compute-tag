@@ -12,7 +12,7 @@
 #   D) PR ist als Draft markiert (PR_DRAFT=true):
 #      -> KEIN Tag (skip=true). Sobald der PR auf "Ready for review"
 #         gestellt wird (Event-Typ ready_for_review), greifen wieder
-#         die normalen Regeln (Preview, Fall 1/2).
+#         die normalen Regeln (Preview, Fall 1/2/L).
 #
 #   1) PR gegen master/main (z.B. von hotfix/*):
 #      Preview-Tag = <letzter_tag_auf_master>-<run_id>
@@ -25,6 +25,17 @@
 #      Release-Branches identisch aus, nur die run_id unterscheidet
 #      sich je Lauf.
 #
+#   L) PR gegen lts/X.Y (Wartungsbranch einer abgelösten Version):
+#      Version X.Y kommt aus dem Branch-Namen (wie bei release/X.Y),
+#      Patch wird hochgezählt (wie bei master/main).
+#      Basis = höchster Tag X.Y.Z, der auf lts/X.Y erreichbar ist.
+#      a) offen/aktualisiert -> Preview = <basis>-<run_id>
+#      b) gemerged           -> finaler Tag = bump_patch(<basis>)
+#      Source-Branch release/* gegen lts/* ist nicht erlaubt (Fehler),
+#      damit keine neue Minor-Version in einen LTS-Branch läuft.
+#      Ein lts/X.Y-Branch wird vom letzten X.Y-Tag angelegt, z.B.
+#        git branch lts/1.5 1.5.7 && git push origin lts/1.5
+#
 #   3) PR nach master gemerged (merged=true, base=master):
 #      a) Source-Branch ist release/X.Y
 #         -> finaler Tag = X.Y.0 (ohne Suffix) - das ist der
@@ -32,12 +43,14 @@
 #            weiter (nächster Hotfix wird X.Y.1 usw.)
 #      b) Source-Branch ist alles andere (hotfix/bugfix/...)
 #         -> finaler Tag = bump_patch(letzter_tag_auf_master)
+#      Tags aus lts/X.Y beeinflussen master nicht, da nur auf master
+#      erreichbare Tags berücksichtigt werden (git tag --merged).
 #
 #   4) PR geschlossen ohne Merge (egal welches Ziel):
 #      -> KEIN Tag.
 #
 #   5) Manueller Trigger (workflow_dispatch):
-#      Wird IMMER wie Fall 1/2 (Preview) behandelt, nie final -
+#      Wird IMMER wie Fall 1/2/La (Preview) behandelt, nie final -
 #      unabhängig davon, welcher Branch gewählt wurde. BASE_REF ist
 #      dabei der manuell gewählte Branch (z.B. per Workflow-Input).
 #
@@ -67,6 +80,17 @@
 #                      (bei ALLEN PR-Aktionen übergeben, sonst wird ein
 #                       PR von upmerge/** nicht erkannt)
 #
+# Optionale Umgebungsvariablen für das Branch-Schema (leer oder nicht
+# gesetzt = Default):
+#   MAIN_BRANCHES      kommagetrennte Namen der Hauptbranches.
+#                      Default: "main,master"
+#   RELEASE_PREFIX     Präfix der Release-Branches vor "X.Y".
+#                      Default: "release/"
+#   LTS_PREFIX         Präfix der Wartungsbranches vor "X.Y".
+#                      Default: "lts/"
+#   Beispiel: RELEASE_PREFIX="dev/" LTS_PREFIX="support/"
+#             -> dev/1.7 und support/1.5
+#
 # Voraussetzung im Workflow: actions/checkout mit fetch-depth: 0 UND
 # fetch-tags: true, sonst sind Tags lokal nicht sichtbar.
 #
@@ -76,8 +100,34 @@
 
 set -euo pipefail
 
-MAIN_BRANCH_REGEX='^(main|master)$'
-RELEASE_BRANCH_REGEX='^release/([0-9]+)\.([0-9]+)$'
+MAIN_BRANCHES="${MAIN_BRANCHES:-main,master}"
+RELEASE_PREFIX="${RELEASE_PREFIX:-release/}"
+LTS_PREFIX="${LTS_PREFIX:-lts/}"
+
+# Maskiert Regex-Sonderzeichen, damit Präfixe wörtlich verglichen werden.
+regex_escape() {
+  printf '%s' "$1" | sed -e 's/[][\.*^$+?(){}|/]/\\&/g'
+}
+
+_main_alternatives=""
+IFS=',' read -r -a _main_list <<< "${MAIN_BRANCHES// /}"
+for _b in "${_main_list[@]}"; do
+  [ -z "$_b" ] && continue
+  _main_alternatives="${_main_alternatives:+${_main_alternatives}|}$(regex_escape "$_b")"
+done
+if [ -z "$_main_alternatives" ]; then
+  echo "::error::MAIN_BRANCHES enthält keinen Branch-Namen." >&2
+  exit 1
+fi
+
+if [ "$RELEASE_PREFIX" = "$LTS_PREFIX" ]; then
+  echo "::error::RELEASE_PREFIX und LTS_PREFIX dürfen nicht gleich sein ('${RELEASE_PREFIX}')." >&2
+  exit 1
+fi
+
+MAIN_BRANCH_REGEX="^(${_main_alternatives})$"
+RELEASE_BRANCH_REGEX="^$(regex_escape "$RELEASE_PREFIX")([0-9]+)\.([0-9]+)$"
+LTS_BRANCH_REGEX="^$(regex_escape "$LTS_PREFIX")([0-9]+)\.([0-9]+)$"
 UPMERGE_BRANCH_REGEX='^upmerge/'
 SEMVER_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
 
@@ -180,15 +230,21 @@ fi
 git fetch --tags --force --quiet || true
 
 # Liefert den höchsten reinen Semver-Tag (X.Y.Z, kein "+..."), der auf
-# $1 (Branch/Ref) erreichbar ist.
+# $1 (Branch/Ref) erreichbar ist. Optional $2 = "X.Y": nur Tags dieser
+# Minor-Version berücksichtigen.
 latest_semver_tag_on() {
   local ref="$1"
+  local minor_prefix="${2:-}"
   local resolved_ref="$ref"
   if ! git rev-parse --verify --quiet "$ref" >/dev/null; then
     resolved_ref="origin/${ref}"
   fi
+  local filter="$SEMVER_TAG_REGEX"
+  if [ -n "$minor_prefix" ]; then
+    filter="^${minor_prefix//./\\.}\\.[0-9]+$"
+  fi
   git tag --merged "$resolved_ref" 2>/dev/null \
-    | grep -E "$SEMVER_TAG_REGEX" \
+    | grep -E "$filter" \
     | sort -t. -k1,1n -k2,2n -k3,3n \
     | tail -n1 || true
 }
@@ -224,8 +280,37 @@ if [[ "$BASE_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
   write_result "$TAG" "false" "Ziel-Branch ist ein release-Branch - Version kommt fest aus dem Branch-Namen (\`${MAJOR}.${MINOR}.0\`), unabhängig von der Tag-Historie; wird nie hochgezählt."
 fi
 
+if [[ "$BASE_REF" =~ $LTS_BRANCH_REGEX ]]; then
+  # Fall L: Wartungsbranch einer abgelösten Version.
+  MAJOR="${BASH_REMATCH[1]}"
+  MINOR="${BASH_REMATCH[2]}"
+
+  if [ -n "${HEAD_REF:-}" ] && [[ "$HEAD_REF" =~ $RELEASE_BRANCH_REGEX ]]; then
+    echo "::error::release-Branch '${HEAD_REF}' darf nicht nach '${BASE_REF}' gemerged werden. Fixes per Cherry-Pick übernehmen." >&2
+    exit 1
+  fi
+
+  BASE_TAG="$(latest_semver_tag_on "$BASE_REF" "${MAJOR}.${MINOR}")"
+  if [ -z "$BASE_TAG" ]; then
+    echo "::error::Kein Tag ${MAJOR}.${MINOR}.Z auf '${BASE_REF}' gefunden. Wartungsbranch vom letzten ${MAJOR}.${MINOR}-Tag anlegen, z.B. git branch ${BASE_REF} ${MAJOR}.${MINOR}.0" >&2
+    exit 1
+  fi
+
+  if [ "${PR_ACTION}" != "closed" ]; then
+    # Fall La: Preview
+    TAG="${BASE_TAG}-${GITHUB_RUN_ID}"
+    echo "Preview-Tag für lts-Branch '${BASE_REF}': ${TAG}" >&2
+    write_result "$TAG" "false" "Ziel-Branch ist ein lts-Branch - Preview: letzter Tag \`${BASE_TAG}\` + Run-ID."
+  fi
+
+  # Fall Lb: Merge -> Patch-Bump innerhalb X.Y
+  TAG="$(bump_patch "$BASE_TAG")"
+  echo "'${HEAD_REF:-}' wurde nach '${BASE_REF}' gemerged -> Patch-Bump auf ${TAG}" >&2
+  write_result "$TAG" "false" "\`${HEAD_REF:-}\` wurde nach lts-Branch \`${BASE_REF}\` gemerged - Patch-Bump von \`${BASE_TAG}\` auf \`${TAG}\`."
+fi
+
 if [[ ! "$BASE_REF" =~ $MAIN_BRANCH_REGEX ]]; then
-  echo "::error::Ziel-Branch '${BASE_REF}' passt weder auf main/master noch auf release/X.Y." >&2
+  echo "::error::Ziel-Branch '${BASE_REF}' passt weder auf ${MAIN_BRANCHES}, ${RELEASE_PREFIX}X.Y noch ${LTS_PREFIX}X.Y." >&2
   exit 1
 fi
 
